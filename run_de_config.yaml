@@ -1,0 +1,84 @@
+# run_de project configuration
+#
+# External variable:
+#   PROJ_ROOT   Project root directory (required)
+# Internal variable:
+#   RUN_DE_HOME Automatically provided by run_de
+
+project:
+  filelist_path: "${PROJ_ROOT}/trunk/design/filelist"
+  common_file: "${PROJ_ROOT}/trunk/design/filelist/common.f"
+  common_sim_file: "${PROJ_ROOT}/trunk/design/filelist/sim/common_sim.f"
+  spyglass_lib_file: "${PROJ_ROOT}/trunk/bin/deflow/spyglass_lib.yaml"
+  common_db_file: "${PROJ_ROOT}/trunk/bin/deflow/common_db.yaml"
+  sdc_path: "${PROJ_ROOT}/trunk/flow/dc/sdc"
+
+tools:
+  vcs:
+    executable: "vcs"
+  verdi:
+    executable: "verdi"
+  spyglass:
+    executable: "spyglass"
+  dc:
+    executable: "dc_shell"
+  formality:
+    executable: "fm_shell"
+
+flows:
+  compile:
+    tool: "vcs"
+    work_path: "${PROJ_ROOT}/build/vcs"
+    include_common: true
+    include_sim: true
+    options: >
+      -full64 -sverilog -timescale=1ns/1ps -debug_access+all
+      +lint=all -assert svaext -j8 +v2k -notice -kdb -lca
+
+  verdi:
+    tool: "verdi"
+    work_path: "${PROJ_ROOT}/build/verdi"
+    include_common: true
+    include_sim: true
+    options: "-sv"
+
+  lint:
+    tool: "spyglass"
+    work_path: "${PROJ_ROOT}/build/spyglass/lint"
+    script: "${RUN_DE_HOME}/tcl/spyglass/lint.tcl"
+    defines:
+      - "TSMC_28HPC"
+    waiver_path: "${PROJ_ROOT}/build/spyglass/lint/waiver"
+    custom_policy_file: "${PROJ_ROOT}/trunk/flow/spyglass/scripts/custom_policy.tcl"
+
+  cdc:
+    tool: "spyglass"
+    work_path: "${PROJ_ROOT}/build/spyglass/cdc"
+    script: "${RUN_DE_HOME}/tcl/spyglass/cdc.tcl"
+    defines:
+      - "TSMC_28HPC"
+    waiver_path: "${PROJ_ROOT}/build/spyglass/cdc/waiver"
+    custom_policy_file: "${PROJ_ROOT}/trunk/flow/spyglass/scripts/custom_policy.tcl"
+
+  syn:
+    tool: "dc"
+    work_path: "${PROJ_ROOT}/build/dc"
+    script: "${RUN_DE_HOME}/tcl/dc/syn.tcl"
+    defines:
+      - "TSMC_28HPC"
+    # Optional hook sourced after the design SDC. Put project-specific
+    # constraints such as default clock uncertainty here.
+    constraint_post_tcl: "${RUN_DE_HOME}/tcl/dc/constraint_post.tcl"
+    # Optional hook sourced after uniquify. Put project-specific dont-touch
+    # constraints here.
+    dont_touch_tcl: "${RUN_DE_HOME}/tcl/dc/dont_touch.tcl"
+    # Optional hook sourced after library setup and before RTL analysis. Put
+    # project-specific dont-use library cell rules here.
+    dont_use_cell_tcl: "${RUN_DE_HOME}/tcl/dc/dont_use_cell.tcl"
+    options: ""
+
+  fm:
+    tool: "formality"
+    work_path: "${PROJ_ROOT}/build/formality"
+    script: "${RUN_DE_HOME}/tcl/formality/fm.tcl"
+    options: ""

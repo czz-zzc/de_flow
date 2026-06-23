@@ -1,0 +1,5 @@
+# Design Compiler 和 Formality 共用的 DB 清单。
+# 相对路径以本文件所在目录为基准。
+
+libraries:
+  - "../../../pdk/db/stdcell_ss.db"

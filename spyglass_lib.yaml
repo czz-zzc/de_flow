@@ -1,0 +1,4 @@
+# SpyGlass Liberty 库清单。相对路径以本文件所在目录为基准。
+
+libraries:
+  - "../../../pdk/lib/stdcell_ss.lib"
