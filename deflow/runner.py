@@ -209,6 +209,76 @@ def run_interactive_process(
     return process.wait()
 
 
+class _OutputTee:
+    def __init__(self, log):
+        self.log = log
+
+    def write(self, data: str) -> None:
+        self.log.write(data)
+        self.log.flush()
+        sys.stdout.write(data)
+        sys.stdout.flush()
+
+    def flush(self) -> None:
+        self.log.flush()
+        sys.stdout.flush()
+
+
+def run_pty_process(
+    executable: str,
+    args: Sequence[str],
+    runtime: Runtime,
+    *,
+    env: Optional[Mapping[str, str]] = None,
+) -> int:
+    """Run through a pseudo-terminal, teeing output to screen and run.log."""
+    if sys.platform == "win32":
+        return run_process(executable, args, runtime, env=env)
+    try:
+        import pexpect
+    except ImportError:
+        return run_process(executable, args, runtime, env=env)
+
+    program = require_executable(executable)
+    command = [str(program), *map(str, args)]
+    runtime.command_file.write_text(_command_text(command) + "\n", encoding="utf-8")
+    merged_env = {**os.environ, **dict(env or {})}
+
+    try:
+        child = pexpect.spawn(
+            str(program),
+            list(map(str, args)),
+            cwd=str(runtime.work_dir),
+            env=merged_env,
+            encoding="utf-8",
+            codec_errors="replace",
+            echo=False,
+        )
+    except OSError as exc:
+        raise FlowError(f"Failed to start {executable}: {exc}") from exc
+
+    with runtime.log_file.open("w", encoding="utf-8") as log:
+        try:
+            if sys.stdin.isatty():
+                def log_output(data):
+                    text = (
+                        data.decode("utf-8", errors="replace")
+                        if isinstance(data, bytes)
+                        else data
+                    )
+                    log.write(text)
+                    log.flush()
+                    return data
+
+                child.interact(output_filter=log_output)
+            else:
+                child.logfile_read = _OutputTee(log)
+                child.expect(pexpect.EOF, timeout=None)
+        finally:
+            child.close()
+    return child.exitstatus if child.exitstatus is not None else 1
+
+
 def launch_process(executable: str, args: Sequence[str], runtime: Runtime) -> int:
     """Launch a GUI process in the background without a shell."""
     program = require_executable(executable)

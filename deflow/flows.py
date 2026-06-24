@@ -90,8 +90,8 @@ def _run_tcl(
             runtime,
             env={"RUN_DE_CONTEXT": str(runtime.context_file)},
         )
-    if config.flow_name == "fm":
-        return runner.run_interactive_process(
+    if config.flow_name in ("lint", "cdc", "fm"):
+        return runner.run_pty_process(
             config.executable,
             args,
             runtime,

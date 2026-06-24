@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -66,6 +67,63 @@ class RunnerTests(unittest.TestCase):
                 )
             self.assertEqual(code, 37)
             self.assertIn("sys.exit(37)", runtime.command_file.read_text())
+
+    def test_pty_process_falls_back_to_pipe_on_windows(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = runner.prepare_runtime(make_config(Path(root)), "top")
+            with mock.patch.object(runner.sys, "platform", "win32"):
+                with mock.patch.object(runner, "run_process", return_value=11) as run:
+                    code = runner.run_pty_process("fake", ["-f", "fm.tcl"], runtime)
+
+            self.assertEqual(code, 11)
+            run.assert_called_once_with("fake", ["-f", "fm.tcl"], runtime, env=None)
+
+    def test_pty_process_interacts_when_stdin_is_tty(self):
+        class FakeChild:
+            exitstatus = 0
+
+            def __init__(self):
+                self.interacted = False
+                self.closed = False
+
+            def interact(self, output_filter=None):
+                self.interacted = True
+                if output_filter is not None:
+                    self.filtered = output_filter(b"fm_shell> ")
+
+            def close(self):
+                self.closed = True
+
+        child = FakeChild()
+        fake_pexpect = types.SimpleNamespace(
+            EOF=object(),
+            spawn=mock.Mock(return_value=child),
+        )
+        with tempfile.TemporaryDirectory() as root:
+            runtime = runner.prepare_runtime(make_config(Path(root)), "top")
+            with mock.patch.object(runner.sys, "platform", "linux"):
+                with mock.patch.dict(sys.modules, {"pexpect": fake_pexpect}):
+                    with mock.patch.object(
+                        runner,
+                        "require_executable",
+                        return_value=Path("/bin/fake"),
+                    ):
+                        with mock.patch.object(
+                            runner.sys.stdin,
+                            "isatty",
+                            return_value=True,
+                        ):
+                            code = runner.run_pty_process(
+                                "fake",
+                                ["-f", "fm.tcl"],
+                                runtime,
+                            )
+
+            self.assertEqual(code, 0)
+            self.assertTrue(child.interacted)
+            self.assertTrue(child.closed)
+            self.assertEqual(child.filtered, b"fm_shell> ")
+            self.assertIn("fm_shell> ", runtime.log_file.read_text(encoding="utf-8"))
 
     def test_list_designs_excludes_common_nested_and_invalid_filelists(self):
         with tempfile.TemporaryDirectory() as root:

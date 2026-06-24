@@ -1,138 +1,131 @@
-# run_de 框架设计说明
+# run_de 架构说明
 
-## 1. 设计目标
+本文面向维护者，描述 `run_de` 的整体架构、模块职责、数据流、运行策略和扩展约束。
 
-`run_de` 为 VCS、Verdi、SpyGlass、Design Compiler 和 Formality 提供统一的芯片设计流程入口。
+## 设计目标
 
-框架的核心目标是：
+`run_de` 为芯片设计常用工具提供统一入口：
 
-- 架构简单，减少重复脚本和多层进程转发。
-- Python 与 EDA 业务逻辑解耦。
-- 让设计人员使用熟悉的 TCL 维护工具流程。
-- 每次运行可追溯、可复现。
-- 新增工具或流程时尽量只增加配置、TCL 和少量注册代码。
-- 工具失败时准确返回退出码，便于 CI 和自动化回归判断结果。
+- VCS compile
+- Verdi
+- SpyGlass lint
+- SpyGlass CDC
+- Design Compiler synthesis
+- Formality equivalence check
 
-核心原则可以概括为：
+核心目标：
 
-> Python 管理“怎么运行”，TCL 管理“工具运行什么”，YAML 管理“当前工程在哪里”。
+- Python 只管理“如何启动流程”，不承载 EDA 业务逻辑。
+- TCL 只管理“工具内部做什么”，由设计/CAD 人员维护。
+- YAML 只描述“当前工程路径、工具和选项是什么”。
+- 每次运行保留命令、配置、上下文、日志、报告和输出，便于复现。
+- 新增 flow 时尽量只增加配置、TCL、注册和测试。
 
-## 2. 职责划分
+一句话原则：
 
-| 层次 | 负责内容 | 主要维护人员 |
-|---|---|---|
-| Python | CLI、配置校验、输入解析、运行目录、日志、进程和退出码 | Flow/Python 开发人员 |
-| TCL | EDA 命令、methodology、goal、约束、报告 | 设计/CAD 人员 |
-| YAML | 工程路径、工具名称、工具选项、宏定义 | 项目维护人员 |
+> Python 负责调度，TCL 负责工具流程，YAML 负责工程差异。
 
-Python 不动态生成包含 EDA 业务逻辑的 TCL。它只生成本次运行的数据上下文，然后调用固定的 TCL 脚本。
-
-## 3. 总体执行链路
-
-```mermaid
-flowchart LR
-    U["用户执行 run_de"] --> CLI["解析命令行参数"]
-    CLI --> CFG["加载并校验当前 Flow 配置"]
-    CFG --> FLOW["选择 Flow 适配器"]
-    FLOW --> INPUT["解析 filelist、SDC、waiver、lib"]
-    INPUT --> RUN["创建独立运行目录"]
-    RUN --> CTX["生成 run_context.tcl"]
-    CTX --> TCL["调用固定 TCL"]
-    TCL --> EDA["执行 EDA 工具"]
-    EDA --> OUT["保存日志、报告和退出码"]
-```
-
-以 Lint 为例：
-
-```bash
-run_de lint -d cpu_top -b memory
-```
-
-内部执行过程如下：
-
-1. CLI 解析 `lint`、`cpu_top` 和 `memory`。
-2. 校验设计名和 black-box 名称。
-3. 加载 YAML 配置。
-4. 只校验 `project`、`tools.spyglass` 和 `flows.lint`。
-5. 查找 `cpu_top.f`、公共 filelist 以及可选约束文件。
-6. 创建独立运行目录。
-7. 保存本次运行的配置快照。
-8. 生成纯数据的 `run_context.tcl`。
-9. 设置 `RUN_DE_CONTEXT`。
-10. 调用固定的 `tcl/spyglass/lint.tcl`。
-11. 实时显示并保存工具日志。
-12. 将 SpyGlass 的真实退出码返回给调用者。
-
-## 4. 目录结构
+## 总体分层
 
 ```text
-run_de                       轻量级命令行入口
-run_de_config.yaml           工程和工具配置
-requirements.txt             Python 依赖
+User CLI
+  │
+  ▼
+deflow.cli
+  │  解析参数、校验设计名、选择 flow
+  ▼
+deflow.config
+  │  读取 YAML、展开环境变量、按当前 flow 校验
+  ▼
+deflow.flows
+  │  选择 flow adapter
+  ▼
+deflow.runner
+  │  准备 filelist、运行目录、命令、日志、进程
+  ▼
+deflow.context
+  │  生成 run_context.tcl
+  ▼
+static TCL
+  │  执行 EDA 命令、goal、report、output
+  ▼
+EDA tool
+```
+
+## 目录与职责
+
+```text
+run_de
+run_de_config.yaml
 
 deflow/
-├── cli.py                   CLI 与统一错误边界
-├── config.py                配置展开和按 Flow 校验
-├── runner.py                filelist、运行目录和进程执行
-├── context.py               run_context.tcl 数据生成
-└── flows.py                 Flow 注册和工具适配
+├── cli.py
+├── config.py
+├── context.py
+├── flows.py
+└── runner.py
 
 tcl/
-├── common/run_de_common.tcl 公共 TCL 初始化逻辑
-├── spyglass/common.tcl      SpyGlass 公共实现
-├── spyglass/lint.tcl        Lint 入口和 goal
-├── spyglass/cdc.tcl         CDC 入口和 goal
-├── dc/syn.tcl               综合流程
-└── formality/fm.tcl         Formality 流程
-
-tests/                       Python 和 TCL 自动化测试
-docs/                        架构及维护文档
+├── common/run_de_common.tcl
+├── spyglass/common.tcl
+├── spyglass/lint.tcl
+├── spyglass/cdc.tcl
+├── dc/syn.tcl
+└── formality/fm.tcl
 ```
 
-## 5. Python 模块设计
+### Python
 
-### 5.1 `run_de`
+Python 负责：
 
-`run_de` 是轻量级可执行入口，只负责将项目目录加入 Python 模块路径并调用 `deflow.cli.main()`。
+- 命令行参数解析。
+- 当前 flow 配置加载和校验。
+- 环境变量展开。
+- filelist 和库清单解析。
+- 运行目录创建。
+- `command.txt`、`resolved_config.yaml`、`run_context.tcl`、`run.log` 管理。
+- 进程启动和退出码返回。
 
-它不负责：
+Python 不负责：
 
-- 解析具体工具配置。
-- 拼接 EDA 命令。
-- 启动其他 Python 子脚本。
-- 保存任何 EDA 流程逻辑。
+- 拼接 EDA 业务 TCL。
+- 决定 SpyGlass goal 细节。
+- 决定 DC compile 策略。
+- 决定 Formality match/verify/report 策略。
 
-这样可以避免原来“入口脚本启动子 Python，子 Python 再调用工具”的多层结构。
+### TCL
 
-### 5.2 `deflow/cli.py`
+TCL 负责：
 
-CLI 层负责：
+- 工具 setup。
+- 读 RTL、读库、读约束。
+- goal/methodology。
+- synthesis、match、verify。
+- report 和 output 写出。
+- 工具版本兼容处理。
 
-- 注册 `compile`、`verdi`、`lint`、`cdc`、`syn` 和 `fm` 子命令。
-- 通过 `run_de -list` 列出 filelist 目录中可用的设计。
-- 解析设计名、black-box 和 GUI 参数。
-- 选择配置文件。
-- 将预期错误转换成简洁的命令行错误信息。
+### YAML
 
-设计名和 black-box 名称必须符合：
+YAML 负责：
 
-```text
-[A-Za-z_][A-Za-z0-9_]*
-```
+- 工程路径。
+- 工具可执行名。
+- flow 工作目录。
+- flow 选项。
+- 工程宏定义。
+- 可选 hook 脚本路径。
 
-校验既可以防止非法模块名，也可以避免参数进入工具和 TCL 后产生注入问题。
+## 配置加载与校验
 
-### 5.3 `deflow/config.py`
+`deflow.config.load_config()` 会：
 
-配置层负责：
+1. 读取 `run_de_config.yaml` 或 `--config` 指定的文件。
+2. 自动注入 `RUN_DE_HOME`。
+3. 展开 `${VAR}` 和 `$VAR`。
+4. 检查引用的外部环境变量是否存在。
+5. 只校验当前 flow 需要的字段。
 
-- 读取 YAML。
-- 展开 `${VAR}` 和 `$VAR` 环境变量。
-- 自动提供 `RUN_DE_HOME`。
-- 检查外部环境变量是否存在。
-- 只校验当前执行 Flow 需要的配置。
-
-例如执行：
+例如：
 
 ```bash
 run_de compile -d cpu_top
@@ -146,226 +139,105 @@ tools.vcs
 flows.compile
 ```
 
-CDC 或 Formality 尚未配置完成时，不会影响 compile。
+不会因为 CDC、DC 或 FM 配置不完整而失败。
 
-配置文件分为三部分：
+FM 是一个特例：`fm -time` 需要根据 `flows.syn.work_path` 找 DC 产物，因此加载 `fm` 时会额外保留并展开 `flows.syn` 的信息，但不会把 `syn` 当作当前执行 flow。
 
-```yaml
-project:  # 工程输入路径
-tools:    # 工具可执行文件
-flows:    # 每个流程的工作目录、TCL 和选项
-```
+## Flow 注册
 
-### 5.4 `deflow/flows.py`
-
-Flow 层负责把命令映射到对应适配器。
-
-流程分为两类：
-
-#### 原生命令行流程
-
-- VCS compile
-- Verdi
-
-这些工具的命令行已经足够清晰，不需要为了形式统一再增加 TCL。
-
-#### TCL 流程
-
-- SpyGlass Lint
-- SpyGlass CDC
-- Design Compiler 综合
-- Formality
-
-这些工具以 TCL 作为主要流程语言，因此 Python 只负责准备上下文并调用固定 TCL。
-
-### 5.5 `deflow/runner.py`
-
-Runner 是公共运行基础层，负责：
-
-- 校验设计名称。
-- 解析工具选项。
-- 查找主 filelist 和公共 filelist。
-- 创建唯一运行目录。
-- 保存配置快照和实际命令。
-- 无 Shell 启动工具。
-- 实时显示并保存工具输出。
-- 原样返回工具退出码。
-
-工具以参数列表执行：
+Flow 在 `deflow.flows.FLOW_SPECS` 中注册：
 
 ```python
-[
-    "spyglass",
-    "-shell",
-    "-tcl",
-    "/path/to/lint.tcl",
-]
+FLOW_SPECS = {
+    "compile": FlowSpec("compile"),
+    "verdi": FlowSpec("verdi"),
+    "lint": FlowSpec("tcl", ("-shell", "-tcl"), ("-tcl",)),
+    "cdc": FlowSpec("tcl", ("-shell", "-tcl"), ("-tcl",)),
+    "syn": FlowSpec("tcl", ("-f",)),
+    "fm": FlowSpec("tcl", ("-f",)),
+}
 ```
 
-不会拼接成：
+Flow 分为三类：
 
-```bash
-cd work && spyglass ... | tee run.log
-```
+- 原生命令行：`compile`、`verdi`
+- Tcl batch/shell：`lint`、`cdc`、`syn`、`fm`
+- GUI/background：`verdi`，以及 SpyGlass `-gui`
 
-因此可以避免 Shell 注入、路径空格、`tee` 依赖以及退出码被二次编码等问题。
+## 运行策略
 
-### 5.6 `deflow/context.py`
+`deflow.runner` 提供几类进程启动方式：
 
-Context 层是 Python 和 TCL 之间的数据桥梁。
+### `run_process`
 
-它只生成数据，例如：
+普通 pipe tee 模式：
 
-```tcl
-array set run_de {}
+- Python 接管 stdout/stderr。
+- 实时打印到屏幕。
+- 同时写入 `run.log`。
+- 返回工具退出码。
 
-set run_de(flow) "lint"
-set run_de(design) "cpu_top"
-set run_de(work_dir) "/project/build/..."
-set run_de(report_dir) "/project/build/.../reports"
-set run_de(sdc_file) "/project/cpu_top.sdc"
+当前用于：
 
-set run_de(filelists) [list "/project/cpu_top.f" "/project/common.f"]
-set run_de(defines) [list "ASIC" "TSMC_28HPC"]
-set run_de(black_boxes) [list "memory"]
-```
+- `compile`
+- pexpect 不可用时的 fallback
 
-以下内容不能出现在 Context 层：
+### `run_pty_process`
 
-```tcl
-new_project
-current_goal
-run_goal
-compile_ultra
-write_report
-```
+伪终端模式：
 
-这些命令属于 EDA 流程，必须保存在静态 TCL 中。
+- Linux 且安装 `pexpect` 时使用 pseudo-terminal。
+- 工具行为更接近手工打开 shell。
+- 输出写屏幕和 `run.log`。
+- 如果当前 stdin 是 TTY，支持用户继续和工具交互。
+- Windows 或缺少 `pexpect` 时 fallback 到 `run_process`。
 
-## 6. Python 与 TCL 的数据协议
+当前用于：
 
-Python 将上下文文件路径写入环境变量：
+- `lint`
+- `cdc`
+- `fm`
+
+`requirements.txt` 中的 pexpect 依赖只在非 Windows 平台启用：
 
 ```text
-RUN_DE_CONTEXT=/path/to/run_context.tcl
+pexpect>=4.9; sys_platform != "win32"
 ```
 
-TCL 通过公共初始化脚本加载：
+### `run_interactive_process`
 
-```tcl
-source $env(RUN_DE_CONTEXT)
-```
+真实终端直连模式：
 
-使用数据型 TCL 而不是大量环境变量，主要原因是：
+- Python 不接管 stdout/stderr。
+- 适合工具自己能写完整 log 的场景。
 
-- TCL list 可以可靠表达多个 filelist、define 和 black-box。
-- 路径和特殊字符可以集中转义。
-- 上下文会保存在运行目录中，便于检查和复现。
-- 设计人员可以清楚看到 Python 最终传递了哪些数据。
+当前用于：
 
-当前上下文主要字段包括：
+- `syn`
 
-| 字段 | 含义 |
-|---|---|
-| `flow` | 当前流程名称 |
-| `gui` | 是否为 GUI 模式；批处理为 `0`，GUI 为 `1` |
-| `design` | Top module 名称 |
-| `work_dir` | 当前运行目录 |
-| `report_dir` | 报告目录 |
-| `output_dir` | 网表、SDC 等交付文件目录 |
-| `filelists` | RTL filelist 列表 |
-| `sdc_file` | 当前设计的 SDC 文件 |
-| `waiver_file` | SpyGlass waiver 文件 |
-| `library_files` | 当前工具需要的 Liberty 或 DB 文件列表 |
-| `custom_policy_file` | SpyGlass 自定义 policy |
-| `defines` | 工程宏定义列表 |
-| `black_boxes` | black-box 模块列表 |
-
-新增上下文字段时，需要同步检查 Python 生成端和对应 TCL 使用端。
-
-## 7. TCL 分层设计
-
-### 7.1 公共初始化层
-
-`tcl/common/run_de_common.tcl` 负责检查并加载 `RUN_DE_CONTEXT`，同时提供可选脚本加载方法。该文件不应包含任何特定 EDA 工具命令。
-
-### 7.2 SpyGlass 公共层
-
-`tcl/spyglass/common.tcl` 负责：
-
-- 创建 SpyGlass project。
-- 配置语言模式和公共选项。
-- 读取 define 和 RTL filelist。
-- 加载 library、policy 和 waiver。
-- 设置 black-box。
-- 执行 goal。
-- 生成报告。
-
-### 7.3 SpyGlass 入口层
-
-`lint.tcl` 只维护 Lint goal，`cdc.tcl` 只维护 CDC goal。修改 goal 时不需要修改 Python，也不需要复制整套 SpyGlass 流程。
-
-SpyGlass 的 `-shell` 模式在 TCL 到达文件末尾后可能继续停留在交互终端，因此 Lint/CDC 在批处理完成后通过 `run_de::finish` 显式执行 `exit 0`。GUI 模式的 Context 中 `run_de(gui)=1`，不会自动退出。
-
-### 7.4 DC 和 Formality
-
-`tcl/dc/syn.tcl` 维护综合流程。
-
-当前综合公共设置包括普通/拓扑模式核数、DesignWare synthetic library、技术库 target/link library 和稳定的总线命名规则。寄存器映射、scan、UPF、特殊 HDL 行为及消息屏蔽不作为框架默认值。
-
-`tcl/formality/fm.tcl` 维护等价性检查流程，当前通过 `RUN_DE_IMPL_NETLIST` 获取综合网表。
-
-Lint、CDC 和 Formality 支持 `-b/--black-box`。DC 综合流程不支持 `-b`；需要黑盒化的 DC 场景应在 RTL、filelist 或项目级 TCL 中处理。Formality 对 reference 和 implementation 两个容器中的同名 design 同时设置 black box。
-
-工艺库、search path、target library、reference/implementation 读取规则等项目相关内容应继续在对应 TCL 中完善。
-
-### 7.5 库清单
-
-库配置分为两个 YAML 入口：
-
-```yaml
-project:
-  spyglass_lib_file: ".../spyglass_lib.yaml"
-  common_db_file: ".../common_db.yaml"
-```
-
-`spyglass_lib.yaml` 保存 SpyGlass 使用的 Liberty `.lib`；`common_db.yaml` 保存 DC 和 Formality 共用的 Synopsys `.db`。两个清单均使用以下结构：
-
-```yaml
-libraries:
-  - "/path/to/library"
-```
-
-Python 根据当前工具选择清单，并通过 `run_de(library_files)` 传递。读取语义保留在工具 TCL 中：SpyGlass 使用 `read_file -type gateslib`，DC 设置 `target_library/link_library`，Formality 使用 `read_db`。
-
-Python 在工具启动前校验文件格式：SpyGlass 接受 `.lib`/`.lib.gz`，DC 和 Formality 接受 `.db`。Lint/CDC 入口使用 `catch` 包住完整流程，正常或异常路径都会调用 `run_de::finish`；批处理异常以非零退出码结束，避免 SpyGlass 退回不可见的交互终端。
-
-## 8. Filelist 策略
-
-主 filelist 使用统一命名规则：
+DC 使用：
 
 ```text
-<project.filelist_path>/<design>.f
+dc_shell -output_log_file <run_dir>/run.log -f syn.tcl
 ```
 
-公共设计 filelist 和仿真 filelist 由以下配置提供：
+### `launch_process`
 
-```yaml
-project:
-  common_file: "${PROJ_ROOT}/trunk/design/filelist/common.f"
-  common_sim_file: "${PROJ_ROOT}/trunk/design/filelist/sim/common_sim.f"
-```
+后台启动模式：
 
-compile 和 Verdi 可以包含仿真公共 filelist；Lint、CDC 和综合默认只使用设计相关 filelist。
+- 启动后立即返回。
+- 用于 GUI 程序。
 
-`run_de -list` 只扫描 `project.filelist_path` 根目录下的 `*.f`，排除 `common_file`、`common_sim_file`、子目录文件以及名称不符合设计名规则的文件。
+当前用于：
 
-## 9. 运行目录与可复现性
+- `verdi`
 
-每次执行都会创建一个独立目录：
+## 运行目录
+
+每次运行创建：
 
 ```text
-<work_path>/<design>_<flow>_<timestamp>/
+<flow.work_path>/<design>_<flow>_<YYYYMMDD_HHMMSS>/
 ├── command.txt
 ├── resolved_config.yaml
 ├── run.log
@@ -374,88 +246,312 @@ compile 和 Verdi 可以包含仿真公共 filelist；Lint、CDC 和综合默认
 └── outputs/
 ```
 
-- `command.txt`：记录实际工具命令。
-- `resolved_config.yaml`：记录环境变量展开后的配置快照。
-- `run.log`：保存工具标准输出和错误输出。
-- `run_context.tcl`：记录传给 TCL 的本次运行数据。
-- `reports/`：保存工具生成的报告。
-- `outputs/`：保存综合网表、输出 SDC 等后续流程输入。
+说明：
 
-目录名称包含微秒级时间戳，降低并发或连续运行时发生目录冲突的风险。
+- 时间戳为秒级。
+- `compile` 和 `verdi` 不生成 `run_context.tcl`。
+- `resolved_config.yaml` 保存当前 flow 相关配置快照。
+- `command.txt` 保存实际启动命令。
+- `run.log` 保存工具输出；DC 由 `dc_shell -output_log_file` 生成，lint/cdc/fm 由 PTY tee 生成。
 
-## 10. 扩展新流程
+如果同一 design/flow 在同一秒重复启动，运行目录会冲突并报错。这是秒级时间戳的取舍。
 
-假设增加 DFT 流程：
+## Context 数据协议
+
+Python 生成 `run_context.tcl`，并通过环境变量传给 TCL：
+
+```text
+RUN_DE_CONTEXT=/path/to/run_context.tcl
+```
+
+TCL 统一调用：
+
+```tcl
+source [file join $script_dir .. common run_de_common.tcl]
+run_de::load_context
+```
+
+`run_context.tcl` 是纯数据文件，例如：
+
+```tcl
+array set run_de {}
+
+set run_de(flow) "fm"
+set run_de(gui) "0"
+set run_de(design) "cpu_top"
+set run_de(work_dir) "/project/build/..."
+set run_de(report_dir) "/project/build/.../reports"
+set run_de(output_dir) "/project/build/.../outputs"
+set run_de(sdc_file) "/project/constraints/cpu_top.sdc"
+set run_de(impl_netlist) "/project/build/dc/.../outputs/cpu_top_syn.v"
+set run_de(svf_file) "/project/build/dc/.../outputs/cpu_top_syn.svf"
+
+set run_de(filelists) [list "/project/filelist/cpu_top.f" "/project/filelist/common.f"]
+set run_de(defines) [list "TSMC_28HPC" "SYNTHESIS"]
+set run_de(black_boxes) [list "memory"]
+set run_de(library_files) [list "/pdk/db/stdcell.db"]
+```
+
+当前字段：
+
+| 字段 | 说明 |
+|---|---|
+| `flow` | 当前 flow 名称 |
+| `gui` | GUI 模式标志 |
+| `design` | top module |
+| `work_dir` | 本次运行目录 |
+| `report_dir` | 报告目录 |
+| `output_dir` | 输出目录 |
+| `filelists` | RTL filelist 列表 |
+| `defines` | 宏定义 |
+| `black_boxes` | black-box 模块 |
+| `library_files` | 当前工具使用的库文件 |
+| `sdc_file` | 当前设计 SDC |
+| `waiver_file` | SpyGlass waiver |
+| `custom_policy_file` | SpyGlass custom policy |
+| `constraint_post_tcl` | DC post-SDC hook |
+| `dont_touch_tcl` | DC dont-touch hook |
+| `dont_use_cell_tcl` | DC dont-use hook |
+| `impl_netlist` | FM implementation netlist |
+| `svf_file` | FM SVF |
+
+Context 层不得包含 EDA 命令，例如：
+
+```text
+run_goal
+compile_ultra
+verify
+write_report
+```
+
+这些必须保存在静态 TCL 中。
+
+## 输入解析
+
+### Filelist
+
+主 filelist：
+
+```text
+<project.filelist_path>/<design>.f
+```
+
+公共 filelist：
+
+- `project.common_file`
+- `project.common_sim_file`
+
+默认策略：
+
+- `compile`、`verdi` 包含 common 和 common_sim。
+- TCL flow 默认包含 common，不包含 common_sim。
+- flow 可以通过 `include_common`、`include_sim` 覆盖。
+
+### 库清单
+
+由 `deflow.context._resolve_libraries()` 解析。
+
+规则：
+
+- SpyGlass 读取 `project.spyglass_lib_file`，只接受 `.lib` 和 `.lib.gz`。
+- DC/Formality 读取 `project.common_db_file`，只接受 `.db`。
+- 清单不存在则返回空列表。
+- 清单存在但库文件不存在或扩展名错误则报错。
+
+### SDC
+
+SDC 路径：
+
+```text
+<project.sdc_path>/<design>.sdc
+```
+
+不存在时写入空字符串，由对应 TCL 决定如何处理。
+
+### Formality DC 产物
+
+`run_de fm -time <timestamp>` 使用：
+
+```text
+<flows.syn.work_path>/<design>_syn_<timestamp>/outputs/<design>_syn.v
+<flows.syn.work_path>/<design>_syn_<timestamp>/outputs/<design>_syn.svf
+```
+
+Python 在启动 FM 前检查这两个文件是否存在，并写入：
+
+```tcl
+run_de(impl_netlist)
+run_de(svf_file)
+```
+
+如果不传 `-time`，FM TCL 仍兼容旧的：
+
+```text
+RUN_DE_IMPL_NETLIST
+```
+
+## TCL 分层
+
+### 公共 TCL
+
+`tcl/common/run_de_common.tcl` 负责：
+
+- 检查 `RUN_DE_CONTEXT`。
+- source `run_context.tcl`。
+- 检查必要字段。
+- 提供 `run_de::optional_source`。
+- 提供 SpyGlass batch 退出封装 `run_de::finish`。
+
+该文件不放具体工具流程命令。
+
+### SpyGlass
+
+入口：
+
+- `tcl/spyglass/lint.tcl`
+- `tcl/spyglass/cdc.tcl`
+
+公共实现：
+
+- `tcl/spyglass/common.tcl`
+
+公共流程：
+
+1. `new_project`
+2. 设置语言和公共选项。
+3. CDC 时设置 SDC/clock 相关参数。
+4. 读取 define、filelist、library。
+5. 读取 SDC、black-box、methodology、policy、waiver。
+6. 逐个执行 goal。
+7. 每个 goal 后单独生成一套报告。
+8. `save_project`。
+
+`handle_large_bus` 只在 lint 中设置；CDC 不设置。
+
+报告目录使用 goal 的最后一段，例如：
+
+```text
+lint/lint_rtl             -> reports/lint_rtl/
+cdc/cdc_setup_check       -> reports/cdc_setup_check/
+cdc/clock_reset_integrity -> reports/clock_reset_integrity/
+```
+
+### Design Compiler
+
+入口：
+
+```text
+tcl/dc/syn.tcl
+```
+
+主要职责：
+
+- 设置 SVF。
+- 设置 host cores。
+- 设置 bus naming。
+- 设置 DesignWare synthetic library。
+- 设置 target/link library。
+- source dont-use hook。
+- analyze/elaborate/link RTL。
+- 写 GTECH 和 uniquified GTECH 快照。
+- source SDC 和 post constraint hook。
+- 执行 SDC sanity report。
+- 执行 `compile_ultra`。
+- 写 final reports。
+- 写综合网表、DDC、SDC、SVF。
+
+辅助报告：
+
+- `tcl/dc/report_sdc_check.tcl`
+- `tcl/dc/report_final.tcl`
+
+### Formality
+
+入口：
+
+```text
+tcl/formality/fm.tcl
+```
+
+主要职责：
+
+- 设置 Formality 默认选项。
+- 设置 command log。
+- 读取 common DB。
+- 读取 SVF。
+- 使用 VCS 风格读取 reference RTL：
+
+```tcl
+read_sverilog -r -vcs "-f $filelist $fm_define_options -sverilog"
+```
+
+- 读取 implementation netlist。
+- 对 reference 和 implementation 同时设置 black-box。
+- `match`。
+- 生成 match/unmatch 报告。
+- `verify`。
+- verify 失败时保存 `.fss` debug session。
+- 生成 failing/unverified/status 等报告。
+
+FM 默认复用 `flows.syn.defines`，保证 reference RTL 编译条件与 DC 综合一致。
+
+## 扩展新 Flow
+
+新增 flow 的推荐步骤：
+
+1. 在 `tcl/<flow>/` 下创建静态 TCL 入口。
+2. 在 `run_de_config.yaml` 中增加工具和 flow 配置。
+3. 在 `deflow.config` 中增加该 flow 的字段校验。
+4. 在 `deflow.cli` 中注册子命令。
+5. 在 `deflow.flows.FLOW_SPECS` 中注册启动方式。
+6. 如需新增 context 字段，在 `deflow.context` 中生成，并同步 TCL 使用端。
+7. 增加 Python/TCL 测试。
+
+新增 flow 时应避免：
+
+- 新建独立 Python 入口脚本。
+- 在 Python 中拼接 EDA TCL 命令。
+- 用 `shell=True` 或 shell 字符串启动工具。
+- 在多个 flow 中复制 filelist、runtime、log 逻辑。
+
+## 测试策略
+
+测试命令：
 
 ```bash
-run_de dft -d cpu_top
+python -m unittest discover -s tests -v
 ```
 
-推荐步骤如下：
+覆盖内容：
 
-1. 创建 `tcl/dft/dft.tcl`。
-2. 在 YAML 中增加工具和 Flow 配置。
-3. 在配置 schema 中声明 DFT 需要的字段。
-4. 在 `FLOW_SPECS` 中登记工具调用方式。
-5. 在 CLI 中增加 `dft` 子命令。
-6. 增加 Context 和命令调用测试。
+- 配置加载和环境变量展开。
+- 按当前 flow 校验配置。
+- 设计名和 black-box 名校验。
+- filelist 查找。
+- 运行目录创建。
+- context 数据生成。
+- 工具命令参数。
+- 进程 runner fallback。
+- Tcl 文件语法完整性。
+- 公共 Tcl 文件可被普通 Tcl interpreter source。
+- 关键 Tcl 设置和报告逻辑存在性。
 
-示例配置：
+自动化测试不能替代真实 EDA smoke test。以下内容仍需在实际工具环境确认：
 
-```yaml
-tools:
-  dft:
-    executable: "dft_shell"
+- SpyGlass methodology 和 goal 是否兼容当前版本。
+- DC library、DesignWare、compile 选项是否符合项目需求。
+- Formality SVF、reference/implementation 读取规则是否符合项目需求。
+- GUI/交互行为是否符合团队使用方式。
 
-flows:
-  dft:
-    tool: "dft"
-    work_path: "${PROJ_ROOT}/build/dft"
-    script: "${RUN_DE_HOME}/tcl/dft/dft.tcl"
-    options: ""
-```
+## 维护约束
 
-新增流程的 EDA 业务仍应全部保存在 `dft.tcl` 中。
+后续修改应遵循：
 
-## 11. 测试策略
-
-自动化测试覆盖：
-
-- 环境变量和 YAML 配置校验。
-- 按当前 Flow 进行配置校验。
-- 设计名称安全校验。
-- filelist 查找规则。
-- 工具真实退出码透传。
-- `run_context.tcl` 数据生成。
-- Python 是否调用固定 TCL。
-- TCL 文件语法完整性。
-- 公共 TCL 文件能否被 Tcl interpreter 加载。
-
-Python 和普通 Tcl interpreter 测试不能替代真实 EDA 验证。SpyGlass methodology、DC library、Formality 输入规则和工具 license 等内容仍需在实际环境中进行 smoke test。
-
-## 12. 维护约束
-
-为了避免架构再次变乱，后续维护应遵循以下约束：
-
-1. 不为每个 Flow 新建独立 Python 入口脚本。
-2. 不在 Python 中生成包含 EDA 命令的大段 TCL。
-3. 不通过 Shell 字符串、`os.system()` 或 `shell=True` 启动工具。
-4. 不在多个 Flow 中复制 filelist 和运行目录逻辑。
-5. 公共 EDA 行为放入对应工具的公共 TCL。
-6. 工程差异放入 YAML，工具流程放入 TCL。
-7. 新增配置字段时同步增加校验和测试。
-8. 新增 Context 字段时同步检查所有使用该字段的 TCL。
-9. 工具返回非零退出码时必须原样向上返回。
-10. 每次运行必须保留命令、配置、上下文和日志。
-
-## 13. 当前边界与后续工作
-
-当前框架已经完成调度架构和静态 TCL 分层，但以下内容仍依赖实际项目完善：
-
-1. DC 的 search path、target library、link library 和工艺相关设置。
-2. Formality 的综合网表、SVF、库文件和 reference/implementation 读取规则。
-3. SpyGlass 不同版本的 methodology、goal 和报告命令兼容性。
-4. 真实 EDA 环境 smoke test。
-5. 根据团队需要增加 dry-run、历史运行索引或 CI 集成。
-
-这些内容应在不破坏 Python、TCL、YAML 职责边界的前提下逐步扩展。
+1. Python 只做调度和数据准备。
+2. TCL 保存工具流程逻辑。
+3. YAML 保存工程差异。
+4. 每个新增配置字段都要有校验和测试。
+5. 每个新增 context 字段都要同步检查所有使用端。
+6. 每次运行必须保留命令、配置、context、log、reports、outputs。
+7. 工具非零退出码必须向上返回。
+8. 不为了局部便利破坏 Python/TCL/YAML 的职责边界。

@@ -32,6 +32,23 @@ class TclSourceTests(unittest.TestCase):
             with self.subTest(path=relative):
                 interpreter.call("source", str(path))
 
+    def test_spyglass_handle_large_bus_is_lint_only(self):
+        source = (TCL_ROOT / "spyglass" / "common.tcl").read_text(encoding="utf-8")
+        self.assertIn('if {$kind eq "lint"}', source)
+        self.assertIn("set_parameter handle_large_bus yes", source)
+
+    def test_spyglass_reports_are_written_per_goal(self):
+        source = (TCL_ROOT / "spyglass" / "common.tcl").read_text(encoding="utf-8")
+        self.assertIn("proc run_de_spyglass::goal_report_dir", source)
+        self.assertIn("set goal_label [file tail $goal]", source)
+        self.assertIn("regsub -all", source)
+        self.assertIn("Writing SpyGlass reports for goal", source)
+        self.assertIn("run_de_spyglass::write_reports $goal", source)
+        self.assertLess(
+            source.index("run_goal"),
+            source.index("run_de_spyglass::write_reports $goal"),
+        )
+
     def test_syn_tcl_keeps_required_common_setup(self):
         source = (TCL_ROOT / "dc" / "syn.tcl").read_text(encoding="utf-8")
         for setting in (

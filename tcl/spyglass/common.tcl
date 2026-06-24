@@ -2,15 +2,24 @@
 
 namespace eval run_de_spyglass {}
 
-proc run_de_spyglass::write_reports {} {
+proc run_de_spyglass::goal_report_dir {goal} {
     global run_de
-    file mkdir $run_de(report_dir)
+    set goal_label [file tail $goal]
+    regsub -all {[^A-Za-z0-9_.-]} $goal_label "_" goal_label
+    return [file join $run_de(report_dir) $goal_label]
+}
+
+proc run_de_spyglass::write_reports {goal} {
+    global run_de
+    set report_dir [run_de_spyglass::goal_report_dir $goal]
+    file mkdir $report_dir
+    puts "Writing SpyGlass reports for goal $goal: $report_dir"
     foreach report_type {
         goal_setup summary waiver moresimple simple spyglass_violations
         stop_summary ignore_summary
     } {
         set report_file [file join \
-            $run_de(report_dir) "$run_de(design)_${report_type}.rpt"]
+            $report_dir "$run_de(design)_${report_type}.rpt"]
         write_report $report_type > $report_file
     }
 }
@@ -74,11 +83,13 @@ proc run_de_spyglass::run {kind goals} {
     foreach goal $goals {
         puts "Running goal: $goal"
         current_goal $goal -top $run_de(design)
-        set_parameter handle_large_bus yes
+        if {$kind eq "lint"} {
+            set_parameter handle_large_bus yes
+        }
         run_goal
+        run_de_spyglass::write_reports $goal
     }
 
-    run_de_spyglass::write_reports
     save_project
     puts "SpyGlass $kind completed for $run_de(design)"
 }

@@ -38,6 +38,22 @@ def make_lint_config(root: Path) -> Config:
     return Config(data, root / "config.yaml", "lint")
 
 
+def make_cdc_config(root: Path) -> Config:
+    config = make_lint_config(root)
+    cdc_script = root / "cdc.tcl"
+    cdc_script.write_text("puts cdc\n", encoding="utf-8")
+    data = {
+        **config.data,
+        "flows": {
+            "cdc": {
+                **config.data["flows"]["lint"],
+                "script": str(cdc_script),
+            }
+        },
+    }
+    return Config(data, root / "config.yaml", "cdc")
+
+
 class ContextAndFlowTests(unittest.TestCase):
     def test_fm_accepts_black_box_arguments(self):
         parser = build_parser()
@@ -335,10 +351,10 @@ class ContextAndFlowTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "dont-use cell Tcl"):
                 context.write_context(config, runtime, "top", [filelist], [])
 
-    def test_spyglass_flow_calls_static_tcl_and_propagates_exit_code(self):
+    def test_spyglass_flow_uses_pty_runner_and_propagates_exit_code(self):
         with tempfile.TemporaryDirectory() as root:
             config = make_lint_config(Path(root))
-            with mock.patch.object(flows.runner, "run_process", return_value=23) as run:
+            with mock.patch.object(flows.runner, "run_pty_process", return_value=23) as run:
                 code = flows.run_flow(config, "top", black_boxes=["memory"])
 
             self.assertEqual(code, 23)
@@ -346,6 +362,17 @@ class ContextAndFlowTests(unittest.TestCase):
             self.assertEqual(args[:2], ["-shell", "-tcl"])
             self.assertEqual(Path(args[2]), config.path_value(config.flow["script"]))
             self.assertIn("RUN_DE_CONTEXT", run.call_args.kwargs["env"])
+
+    def test_cdc_flow_uses_pty_runner(self):
+        with tempfile.TemporaryDirectory() as root:
+            config = make_cdc_config(Path(root))
+            with mock.patch.object(flows.runner, "run_pty_process", return_value=0) as run:
+                code = flows.run_flow(config, "top")
+
+            self.assertEqual(code, 0)
+            args = run.call_args.args[1]
+            self.assertEqual(args[:2], ["-shell", "-tcl"])
+            self.assertEqual(Path(args[2]), config.path_value(config.flow["script"]))
 
     def test_syn_flow_attaches_terminal_by_default(self):
         with tempfile.TemporaryDirectory() as root:
@@ -378,7 +405,7 @@ class ContextAndFlowTests(unittest.TestCase):
             self.assertEqual(args[2:4], ["-f", str(root_path / "syn.tcl")])
             self.assertIn("RUN_DE_CONTEXT", run.call_args.kwargs["env"])
 
-    def test_fm_flow_attaches_terminal_by_default(self):
+    def test_fm_flow_uses_pty_runner_by_default(self):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             config = make_lint_config(root_path)
@@ -404,9 +431,7 @@ class ContextAndFlowTests(unittest.TestCase):
             fm_config = Config(data, root_path / "config.yaml", "fm")
             (root_path / "fm.tcl").write_text("puts fm\n", encoding="utf-8")
 
-            with mock.patch.object(
-                flows.runner, "run_interactive_process", return_value=0
-            ) as run:
+            with mock.patch.object(flows.runner, "run_pty_process", return_value=0) as run:
                 code = flows.run_flow(fm_config, "top")
 
             self.assertEqual(code, 0)
