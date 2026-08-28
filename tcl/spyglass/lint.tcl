@@ -7,6 +7,9 @@ source [file join $script_dir common.tcl]
 
 set lint_goals [list \
     lint/lint_rtl \
+    lint/lint_turbo_rtl \
+    lint/lint_functional_rtl \
+    lint/lint_abstract \
 ]
 
 if {[catch {run_de_spyglass::run lint $lint_goals} run_error]} {
