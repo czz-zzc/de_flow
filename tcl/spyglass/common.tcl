@@ -83,7 +83,10 @@ proc run_de_spyglass::run {kind goals} {
     foreach goal $goals {
         puts "Running goal: $goal"
         current_goal $goal -top $run_de(design)
-        if {$kind eq "lint"} {
+        if {$goal in {
+            lint/lint_rtl
+            lint/lint_turbo_rtl
+        }} {
             set_parameter handle_large_bus yes
         }
         run_goal
