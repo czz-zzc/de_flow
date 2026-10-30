@@ -28,4 +28,7 @@ foreach_in_collection clk [all_clocks] {
 
     set clk_uncer [expr {min(0.25 * $clk_prd, 1.0)}]
     set_clock_uncertainty -setup $clk_uncer $clk
+
+    puts [format "Clock: %-40s Period: %10.4f  Setup uncertainty: %10.4f" \
+        $clk_name $clk_prd $clk_uncer]
 }
